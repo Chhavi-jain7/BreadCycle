@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Next.js build output and local development caches
+.next/
+.next-*/
+out/
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+
+# Local databases and runtime logs
+*.db
+*.sqlite
+*.sqlite3
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.vscode/

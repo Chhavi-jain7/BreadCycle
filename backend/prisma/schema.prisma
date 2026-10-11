@@ -1,0 +1,199 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id               String   @id @default(uuid())
+  email            String   @unique
+  passwordHash     String
+  name             String
+  role             String // RESTAURANT, INDIVIDUAL, NGO, VOLUNTEER, ADMIN
+  phone            String?
+  address          String?
+  latitude         Float?
+  longitude        Float?
+  reliabilityScore Float    @default(85.0) // 0-100 historical pickup reliability
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  restaurant    RestaurantProfile?
+  ngo           NgoProfile?
+  volunteer     VolunteerProfile?
+  donations     Donation[]         @relation("RestaurantDonations")
+  reservations  Reservation[]      @relation("UserReservations")
+  pickupTasks   PickupTask[]       @relation("VolunteerPickupTasks")
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  sessions      UserSession[]
+}
+
+model UserSession {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model RestaurantProfile {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessName  String
+  fssaiLicense  String
+  address       String
+  contactPerson String?
+  cuisineType   String?
+  latitude      Float
+  longitude     Float
+  isVerified    Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model NgoProfile {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgName            String
+  registrationNumber String
+  fssaiSurplusReg    String?
+  capacityMeals      Int      @default(100)
+  serviceRadiusKm    Float    @default(15.0)
+  verificationStatus String   @default("PENDING") // PENDING, VERIFIED, REJECTED
+  verificationDocs   String?
+  latitude           Float
+  longitude          Float
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model VolunteerProfile {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicleType   String   @default("BICYCLE") // BICYCLE, MOTORCYCLE, CAR, VAN
+  activeStatus  Boolean  @default(true)
+  maxCapacityKg Float    @default(20.0)
+  latitude      Float
+  longitude     Float
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Donation {
+  id                        String    @id @default(uuid())
+  restaurantId              String
+  restaurantUser            User      @relation("RestaurantDonations", fields: [restaurantId], references: [id])
+  title                     String
+  description               String
+  category                  String // BAKERY, COOKED_MEALS, PACKAGED, PRODUCE, DAIRY
+  totalQuantity             Int
+  remainingQuantity         Int
+  unit                      String    @default("PORTIONS") // PORTIONS, KGS, BOXES
+  prepTime                  DateTime
+  expiryTime                DateTime
+  pickupDeadline            DateTime
+  storageType               String    @default("ROOM_TEMP") // ROOM_TEMP, HOT_HOLDING_60C, CHILLED_4C
+  allergens                 String    @default("[]") // JSON string array: ["Gluten", "Dairy", "Nuts"]
+  dietaryTags               String    @default("VEG") // VEG, NON_VEG, VEGAN
+  fssaiCompliant            Boolean   @default(true)
+  safetyStatus              String    @default("SAFE") // SAFE, FLAGGED, BLOCKED, EXPIRED
+  safetyNotes               String?
+  safetyRiskLevel           String    @default("LOW") // LOW, CAUTION, HIGH
+  safetyReviewStatus        String    @default("NOT_REVIEWED") // NOT_REVIEWED, PENDING, REVIEWED, NEEDS_UPDATE
+  safetyRiskReasons         String    @default("[]")
+  safetyReviewedAt          DateTime?
+  safetyReviewedBy          String?
+  reportedSafetyDeclaration Boolean   @default(false)
+  allergensReviewed         Boolean   @default(false)
+  pickupAddress             String
+  latitude                  Float
+  longitude                 Float
+  status                    String    @default("AVAILABLE") // AVAILABLE, RESERVED, COMPLETED, CANCELLED
+  version                   Int       @default(1)
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  reservations   Reservation[]
+  recoveryEvents RecoveryEvent[]
+}
+
+model Reservation {
+  id                  String    @id @default(uuid())
+  donationId          String
+  donation            Donation  @relation(fields: [donationId], references: [id], onDelete: Cascade)
+  userId              String
+  user                User      @relation("UserReservations", fields: [userId], references: [id])
+  reservedQuantity    Int
+  pickupCode          String    @unique // keyed HMAC digest; never stores the user-visible code
+  pickupCodeEncrypted String?
+  status              String    @default("PENDING") // PENDING, CONFIRMED_PICKUP, EXPIRED, CANCELLED, RECOVERED
+  claimType           String    @default("INDIVIDUAL") // INDIVIDUAL, NGO_BULK
+  collectedQuantity   Int       @default(0)
+  expiresAt           DateTime
+  confirmedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  pickupTasks    PickupTask[]
+  recoveryEvents RecoveryEvent[] @relation("OriginalReservation")
+}
+
+model PickupTask {
+  id            String      @id @default(uuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  volunteerId   String?
+  volunteer     User?       @relation("VolunteerPickupTasks", fields: [volunteerId], references: [id])
+  status        String      @default("UNASSIGNED") // UNASSIGNED, ASSIGNED, PICKED_UP, DELIVERED, FAILED
+  notes         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+model RecoveryEvent {
+  id                    String       @id @default(uuid())
+  donationId            String
+  donation              Donation     @relation(fields: [donationId], references: [id], onDelete: Cascade)
+  originalReservationId String?
+  originalReservation   Reservation? @relation("OriginalReservation", fields: [originalReservationId], references: [id])
+  recoveredQuantity     Int
+  previousRecipientId   String?
+  newRecipientId        String?
+  reason                String // MISSED_DEADLINE, NO_SHOW, CANCELLED
+  status                String // TRIGGERED, REALLOCATED, FAILED_SAFE_WINDOW_PASSED
+  matchingScore         Float?
+  notes                 String?
+  createdAt             DateTime     @default(now())
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   @default("INFO") // INFO, ALERT, RECOVERY, PICKUP
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action      String // DONATION_CREATED, RESERVED, HANDOVER_CONFIRMED, RECOVERY_TRIGGERED, SAFETY_BLOCKED, etc.
+  entity      String // Donation, Reservation, User, NgoProfile
+  entityId    String?
+  detailsJson String? // JSON string
+  ipAddress   String?  @default("127.0.0.1")
+  createdAt   DateTime @default(now())
+}
