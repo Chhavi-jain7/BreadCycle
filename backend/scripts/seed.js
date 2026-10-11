@@ -1,34 +1,122 @@
 const { PrismaClient } = require('@prisma/client');
 const crypto = require('crypto');
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const {
+  hashPassword,
+  generatePickupCode,
+  pickupCodeHash,
+  encryptPickupCode,
+} = require('../lib/auth-helpers');
 
 const prisma = new PrismaClient();
 
-function hashPassword(password) {
-  return crypto.createHash('sha256').update(password).digest('hex');
+class SafeSeedError extends Error {}
+
+const demoCredentials = [];
+
+function createDemoPasswordHash(email) {
+  const password = crypto.randomBytes(24).toString('base64url');
+  demoCredentials.push({ email, password });
+  return hashPassword(password);
+}
+
+function createPickupCodeRecord(secret) {
+  const code = generatePickupCode();
+  return {
+    pickupCode: pickupCodeHash(code, secret),
+    pickupCodeEncrypted: encryptPickupCode(code, secret),
+  };
+}
+
+async function getExistingDataTables() {
+  const models = [
+    ['users', prisma.user],
+    ['donations', prisma.donation],
+    ['reservations', prisma.reservation],
+    ['pickup tasks', prisma.pickupTask],
+    ['recovery events', prisma.recoveryEvent],
+    ['notifications', prisma.notification],
+    ['audit logs', prisma.auditLog],
+  ];
+  const counts = await Promise.all(models.map(async ([name, model]) => [name, await model.count()]));
+  return counts.filter(([, count]) => count > 0).map(([name]) => name);
+}
+
+async function createDemoUser({ data }) {
+  const existing = await prisma.user.findUnique({ where: { email: data.email } });
+  const profiles = [
+    ['restaurant', 'restaurantProfile'],
+    ['ngo', 'ngoProfile'],
+    ['volunteer', 'volunteerProfile'],
+  ];
+
+  if (existing) {
+    const credentialIndex = demoCredentials.findIndex((credential) => credential.email === data.email);
+    if (credentialIndex !== -1) demoCredentials.splice(credentialIndex, 1);
+    if (existing.role !== data.role) {
+      throw new SafeSeedError(`Demo account ${data.email} already exists with a different role; it was not changed.`);
+    }
+    for (const [relation, model] of profiles) {
+      const profile = data[relation]?.create;
+      if (profile) {
+        await prisma[model].upsert({
+          where: { userId: existing.id },
+          create: { ...profile, userId: existing.id },
+          update: {},
+        });
+      }
+    }
+    console.log(`Preserved existing demo account ${data.email}; its password was not changed.`);
+    return existing;
+  }
+
+  return prisma.user.create({ data });
+}
+
+async function createDemoDonation({ data }) {
+  const existing = await prisma.donation.findFirst({
+    where: { restaurantId: data.restaurantId, title: data.title },
+  });
+  return existing || prisma.donation.create({ data });
+}
+
+async function createDemoReservation({ data }) {
+  const existing = await prisma.reservation.findFirst({
+    where: {
+      donationId: data.donationId,
+      userId: data.userId,
+      claimType: data.claimType,
+    },
+  });
+  return existing || prisma.reservation.create({ data });
 }
 
 async function main() {
-  console.log('🌱 Seeding BreadCycle database with realistic production-grade demo data...');
+  if (!process.env.DATABASE_URL) {
+    throw new SafeSeedError('DATABASE_URL is required. Configure it for the intended database before seeding.');
+  }
+  if (process.env.ALLOW_DEMO_SEED !== 'true') {
+    throw new SafeSeedError('Set ALLOW_DEMO_SEED=true to explicitly enable demo data seeding.');
+  }
+  if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+    throw new SafeSeedError('SESSION_SECRET must be configured with at least 32 characters so demo pickup codes can be protected.');
+  }
 
-  await prisma.auditLog.deleteMany({});
-  await prisma.notification.deleteMany({});
-  await prisma.recoveryEvent.deleteMany({});
-  await prisma.pickupTask.deleteMany({});
-  await prisma.reservation.deleteMany({});
-  await prisma.donation.deleteMany({});
-  await prisma.volunteerProfile.deleteMany({});
-  await prisma.ngoProfile.deleteMany({});
-  await prisma.restaurantProfile.deleteMany({});
-  await prisma.user.deleteMany({});
+  const existingData = await getExistingDataTables();
+  if (existingData.length > 0) {
+    console.log(`Preserving existing database records in: ${existingData.join(', ')}.`);
+  }
+  console.log('Adding BreadCycle demo data without overwriting existing records...');
 
-  const defaultPasswordHash = hashPassword('demo1234');
+  const sessionSecret = process.env.SESSION_SECRET;
   const now = new Date();
 
   // Restaurant 1: The Golden Crust Bakery
-  const bakeryUser = await prisma.user.create({
+  const bakeryUser = await createDemoUser({
     data: {
       email: 'bakery@breadcycle.demo',
-      passwordHash: defaultPasswordHash,
+      passwordHash: createDemoPasswordHash('bakery@breadcycle.demo'),
       name: 'Marco Rossi',
       role: 'RESTAURANT',
       phone: '+91 98110 12345',
@@ -52,10 +140,10 @@ async function main() {
   });
 
   // Restaurant 2: Spice Symphony Kitchen
-  const kitchenUser = await prisma.user.create({
+  const kitchenUser = await createDemoUser({
     data: {
       email: 'kitchen@breadcycle.demo',
-      passwordHash: defaultPasswordHash,
+      passwordHash: createDemoPasswordHash('kitchen@breadcycle.demo'),
       name: 'Chef Ananya Roy',
       role: 'RESTAURANT',
       phone: '+91 98200 54321',
@@ -79,10 +167,10 @@ async function main() {
   });
 
   // NGO 1: Feeding Hope Foundation (VERIFIED)
-  const verifiedNgoUser = await prisma.user.create({
+  const verifiedNgoUser = await createDemoUser({
     data: {
       email: 'feedinghope@breadcycle.demo',
-      passwordHash: defaultPasswordHash,
+      passwordHash: createDemoPasswordHash('feedinghope@breadcycle.demo'),
       name: 'David Chen',
       role: 'NGO',
       phone: '+91 98765 43210',
@@ -107,10 +195,10 @@ async function main() {
   });
 
   // NGO 2: City Care Kitchen (PENDING)
-  const pendingNgoUser = await prisma.user.create({
+  const pendingNgoUser = await createDemoUser({
     data: {
       email: 'citycare@breadcycle.demo',
-      passwordHash: defaultPasswordHash,
+      passwordHash: createDemoPasswordHash('citycare@breadcycle.demo'),
       name: 'Fatima Al-Mansoor',
       role: 'NGO',
       phone: '+91 98101 99887',
@@ -135,10 +223,10 @@ async function main() {
   });
 
   // Recipient 1: Priya Sharma
-  const priyaUser = await prisma.user.create({
+  const priyaUser = await createDemoUser({
     data: {
       email: 'priya@breadcycle.demo',
-      passwordHash: defaultPasswordHash,
+      passwordHash: createDemoPasswordHash('priya@breadcycle.demo'),
       name: 'Priya Sharma',
       role: 'INDIVIDUAL',
       phone: '+91 99112 33445',
@@ -150,10 +238,10 @@ async function main() {
   });
 
   // Recipient 2: Rahul Verma
-  const rahulUser = await prisma.user.create({
+  const rahulUser = await createDemoUser({
     data: {
       email: 'rahul@breadcycle.demo',
-      passwordHash: defaultPasswordHash,
+      passwordHash: createDemoPasswordHash('rahul@breadcycle.demo'),
       name: 'Rahul Verma',
       role: 'INDIVIDUAL',
       phone: '+91 99554 11223',
@@ -165,10 +253,10 @@ async function main() {
   });
 
   // Volunteer: Arjun Patel
-  const volunteerUser = await prisma.user.create({
+  const volunteerUser = await createDemoUser({
     data: {
       email: 'arjun@breadcycle.demo',
-      passwordHash: defaultPasswordHash,
+      passwordHash: createDemoPasswordHash('arjun@breadcycle.demo'),
       name: 'Arjun Patel',
       role: 'VOLUNTEER',
       phone: '+91 97118 77665',
@@ -189,10 +277,10 @@ async function main() {
   });
 
   // Admin: Sarah Jenkins
-  const adminUser = await prisma.user.create({
+  const adminUser = await createDemoUser({
     data: {
       email: 'admin@breadcycle.demo',
-      passwordHash: defaultPasswordHash,
+      passwordHash: createDemoPasswordHash('admin@breadcycle.demo'),
       name: 'Sarah Jenkins',
       role: 'ADMIN',
       phone: '+91 99999 00000',
@@ -204,7 +292,7 @@ async function main() {
   });
 
   // Realistic Donations
-  const donation1 = await prisma.donation.create({
+  const donation1 = await createDemoDonation({
     data: {
       restaurantId: bakeryUser.id,
       title: 'Artisan Sourdough Loaves & Croissants',
@@ -229,7 +317,7 @@ async function main() {
     },
   });
 
-  const donation2 = await prisma.donation.create({
+  const donation2 = await createDemoDonation({
     data: {
       restaurantId: kitchenUser.id,
       title: 'Nutritious Dal Makhani & Jeera Rice Trays',
@@ -254,7 +342,7 @@ async function main() {
     },
   });
 
-  const donation3 = await prisma.donation.create({
+  const donation3 = await createDemoDonation({
     data: {
       restaurantId: kitchenUser.id,
       title: 'Vegetable Biryani & Mirchi Salan (Urgent Window)',
@@ -279,7 +367,7 @@ async function main() {
     },
   });
 
-  const donation4 = await prisma.donation.create({
+  const donation4 = await createDemoDonation({
     data: {
       restaurantId: bakeryUser.id,
       title: 'Fresh Milk & Heavy Cream Dessert Tarts',
@@ -303,14 +391,139 @@ async function main() {
       status: 'CANCELLED',
     },
   });
+  const donation5 = await createDemoDonation({
+    data: {
+      restaurantId: bakeryUser.id,
+      title: 'Fresh Vegetable Sandwiches & Bread Rolls',
+      description: 'Freshly prepared vegetable sandwiches and bread rolls remaining after the morning service.',
+      category: 'BAKERY',
+      totalQuantity: 35,
+      remainingQuantity: 35,
+      unit: 'PORTIONS',
+      prepTime: new Date(now.getTime() - 1 * 3600 * 1000),
+      pickupDeadline: new Date(now.getTime() + 2 * 3600 * 1000),
+      expiryTime: new Date(now.getTime() + 3 * 3600 * 1000),
+      storageType: 'CHILLED_4C',
+      allergens: JSON.stringify(['Gluten / Wheat', 'Dairy / Milk']),
+      dietaryTags: 'VEG',
+      fssaiCompliant: true,
+      safetyStatus: 'SAFE',
+      safetyNotes: 'Demo record: refrigeration and packaging checks recorded.',
+      pickupAddress: 'The Golden Crust Bakery, Connaught Place, New Delhi',
+      latitude: 28.6315,
+      longitude: 77.2167,
+      status: 'AVAILABLE',
+    },
+  });
 
-  // Active reservation with code BC-4819
-  const res1 = await prisma.reservation.create({
+  const donation6 = await createDemoDonation({
+    data: {
+      restaurantId: kitchenUser.id,
+      title: 'Fresh Seasonal Fruit Boxes',
+      description: 'Surplus apples, bananas, oranges, and guavas sorted into donation boxes.',
+      category: 'FRUITS',
+      totalQuantity: 24,
+      remainingQuantity: 18,
+      unit: 'PORTIONS',
+      prepTime: new Date(now.getTime() - 2 * 3600 * 1000),
+      pickupDeadline: new Date(now.getTime() + 4 * 3600 * 1000),
+      expiryTime: new Date(now.getTime() + 12 * 3600 * 1000),
+      storageType: 'ROOM_TEMP',
+      allergens: JSON.stringify([]),
+      dietaryTags: 'VEGAN',
+      fssaiCompliant: true,
+      safetyStatus: 'SAFE',
+      safetyNotes: 'Demo record: fruit inspection and sorting completed.',
+      pickupAddress: 'Spice Symphony Kitchen, South Extension II, New Delhi',
+      latitude: 28.5714,
+      longitude: 77.2201,
+      status: 'AVAILABLE',
+    },
+  });
+
+  const donation7 = await createDemoDonation({
+    data: {
+      restaurantId: kitchenUser.id,
+      title: 'Packed Rajma Rice Lunch Boxes',
+      description: 'Surplus vegetarian lunch boxes prepared for a corporate event.',
+      category: 'COOKED_MEALS',
+      totalQuantity: 50,
+      remainingQuantity: 28,
+      unit: 'PORTIONS',
+      prepTime: new Date(now.getTime() - 1 * 3600 * 1000),
+      pickupDeadline: new Date(now.getTime() + 1.5 * 3600 * 1000),
+      expiryTime: new Date(now.getTime() + 3 * 3600 * 1000),
+      storageType: 'HOT_HOLDING_60C',
+      allergens: JSON.stringify([]),
+      dietaryTags: 'VEG',
+      fssaiCompliant: true,
+      safetyStatus: 'SAFE',
+      safetyNotes: 'Demo record: hot-holding conditions must be verified at pickup.',
+      pickupAddress: 'Spice Symphony Kitchen, South Extension II, New Delhi',
+      latitude: 28.5714,
+      longitude: 77.2201,
+      status: 'AVAILABLE',
+    },
+  });
+
+  const donation8 = await createDemoDonation({
+    data: {
+      restaurantId: bakeryUser.id,
+      title: 'Packaged Oat Cookies',
+      description: 'Sealed surplus oat cookies in their original packaging, with ingredient and allergen labels.',
+      category: 'PACKAGED_FOOD',
+      totalQuantity: 60,
+      remainingQuantity: 60,
+      unit: 'PORTIONS',
+      prepTime: new Date(now.getTime() - 3 * 3600 * 1000),
+      pickupDeadline: new Date(now.getTime() + 8 * 3600 * 1000),
+      expiryTime: new Date(now.getTime() + 72 * 3600 * 1000),
+      storageType: 'ROOM_TEMP',
+      allergens: JSON.stringify(['Gluten / Wheat', 'Dairy / Milk']),
+      dietaryTags: 'VEG',
+      fssaiCompliant: true,
+      safetyStatus: 'SAFE',
+      safetyNotes: 'Demo record: sealed packaging and expiry labels require verification.',
+      pickupAddress: 'The Golden Crust Bakery, Connaught Place, New Delhi',
+      latitude: 28.6315,
+      longitude: 77.2167,
+      status: 'AVAILABLE',
+    },
+  });
+
+  const donation9 = await createDemoDonation({
+    data: {
+      restaurantId: kitchenUser.id,
+      title: 'Mixed Curry Trays — Safety Review Required',
+      description: 'Prepared food reported with an incomplete temperature log. Awaiting safety review.',
+      category: 'COOKED_MEALS',
+      totalQuantity: 20,
+      remainingQuantity: 20,
+      unit: 'PORTIONS',
+      prepTime: new Date(now.getTime() - 3 * 3600 * 1000),
+      pickupDeadline: new Date(now.getTime() + 1 * 3600 * 1000),
+      expiryTime: new Date(now.getTime() + 2 * 3600 * 1000),
+      storageType: 'ROOM_TEMP',
+      allergens: JSON.stringify(['Dairy / Milk']),
+      dietaryTags: 'VEG',
+      fssaiCompliant: false,
+      safetyStatus: 'BLOCKED',
+      safetyNotes: 'Demo record: blocked until a qualified safety reviewer verifies handling conditions.',
+      pickupAddress: 'Spice Symphony Kitchen, South Extension II, New Delhi',
+      latitude: 28.5714,
+      longitude: 77.2201,
+      status: 'CANCELLED',
+    },
+  });
+
+
+  // Active reservation with a protected pickup code.
+  const res1 = await createDemoReservation({
     data: {
       donationId: donation1.id,
       userId: priyaUser.id,
       reservedQuantity: 4,
-      pickupCode: 'BC-4819',
+      ...createPickupCodeRecord(sessionSecret),
       status: 'PENDING',
       claimType: 'INDIVIDUAL',
       expiresAt: new Date(now.getTime() + 90 * 60 * 1000),
@@ -318,34 +531,37 @@ async function main() {
   });
 
   // NGO Bulk claim
-  const res2 = await prisma.reservation.create({
+  const res2 = await createDemoReservation({
     data: {
       donationId: donation2.id,
       userId: verifiedNgoUser.id,
       reservedQuantity: 20,
-      pickupCode: 'BC-9921',
+      ...createPickupCodeRecord(sessionSecret),
       status: 'PENDING',
       claimType: 'NGO_BULK',
       expiresAt: new Date(now.getTime() + 120 * 60 * 1000),
     },
   });
 
-  await prisma.pickupTask.create({
-    data: {
-      reservationId: res2.id,
-      volunteerId: volunteerUser.id,
-      status: 'ASSIGNED',
-      notes: 'Pick up 20 hot meal trays from Spice Symphony and transport to Feeding Hope shelter.',
-    },
-  });
+  const existingPickupTask = await prisma.pickupTask.findFirst({ where: { reservationId: res2.id } });
+  if (!existingPickupTask) {
+    await prisma.pickupTask.create({
+      data: {
+        reservationId: res2.id,
+        volunteerId: volunteerUser.id,
+        status: 'ASSIGNED',
+        notes: 'Pick up 20 hot meal trays from Spice Symphony and transport to Feeding Hope shelter.',
+      },
+    });
+  }
 
   // Pre-seeded Expired Reservation ready for immediate 1-click recovery demonstration
-  const expiredRes = await prisma.reservation.create({
+  const expiredRes = await createDemoReservation({
     data: {
       donationId: donation3.id,
       userId: rahulUser.id,
       reservedQuantity: 10,
-      pickupCode: 'BC-3108',
+      ...createPickupCodeRecord(sessionSecret),
       status: 'PENDING',
       claimType: 'INDIVIDUAL',
       expiresAt: new Date(now.getTime() - 15 * 60 * 1000), // Expired 15 mins ago
@@ -354,12 +570,12 @@ async function main() {
   });
 
   // Historical recovery event
-  const pastReservation = await prisma.reservation.create({
+  const pastReservation = await createDemoReservation({
     data: {
       donationId: donation1.id,
       userId: rahulUser.id,
       reservedQuantity: 4,
-      pickupCode: 'BC-1142',
+      ...createPickupCodeRecord(sessionSecret),
       status: 'RECOVERED',
       claimType: 'INDIVIDUAL',
       expiresAt: new Date(now.getTime() - 3 * 3600 * 1000),
@@ -367,47 +583,66 @@ async function main() {
     },
   });
 
-  await prisma.recoveryEvent.create({
-    data: {
-      donationId: donation1.id,
-      originalReservationId: pastReservation.id,
-      recoveredQuantity: 4,
-      previousRecipientId: rahulUser.id,
-      newRecipientId: priyaUser.id,
-      reason: 'MISSED_DEADLINE',
-      status: 'REALLOCATED',
-      matchingScore: 94.2,
-      notes: 'Auto-recovered 4 portions of artisan bread. Reallocated to Priya Sharma (Distance: 1.8km, Urgency fit: 92%).',
-      createdAt: new Date(now.getTime() - 2.5 * 3600 * 1000),
+  const existingRecovery = await prisma.recoveryEvent.findFirst({
+    where: { originalReservationId: pastReservation.id, reason: 'MISSED_DEADLINE' },
+  });
+  if (!existingRecovery) {
+    await prisma.recoveryEvent.create({
+      data: {
+        donationId: donation1.id,
+        originalReservationId: pastReservation.id,
+        recoveredQuantity: 4,
+        previousRecipientId: rahulUser.id,
+        newRecipientId: priyaUser.id,
+        reason: 'MISSED_DEADLINE',
+        status: 'REALLOCATED',
+        matchingScore: 94.2,
+        notes: 'Auto-recovered 4 portions of artisan bread. Reallocated to Priya Sharma (Distance: 1.8km, Urgency fit: 92%).',
+        createdAt: new Date(now.getTime() - 2.5 * 3600 * 1000),
+      },
+    });
+  }
+
+  const demoNotifications = [
+    {
+      userId: bakeryUser.id,
+      title: '🌟 New Surplus Reservation',
+      message: 'Priya Sharma reserved 4 portions of Artisan Sourdough Loaves. A pickup code is available in My Pickups.',
+      type: 'PICKUP',
+      isRead: false,
     },
-  });
+    {
+      userId: kitchenUser.id,
+      title: '🏛️ NGO Bulk Claim Received',
+      message: 'Feeding Hope Foundation claimed 20 portions of Dal Makhani & Jeera Rice. Volunteer courier Arjun Patel assigned.',
+      type: 'PICKUP',
+      isRead: false,
+    },
+  ];
+  for (const notification of demoNotifications) {
+    const existingNotification = await prisma.notification.findFirst({
+      where: { userId: notification.userId, title: notification.title },
+    });
+    if (!existingNotification) await prisma.notification.create({ data: notification });
+  }
 
-  await prisma.notification.createMany({
-    data: [
-      {
-        userId: bakeryUser.id,
-        title: '🌟 New Surplus Reservation',
-        message: 'Priya Sharma reserved 4 portions of Artisan Sourdough Loaves. Pickup code BC-4819 generated.',
-        type: 'PICKUP',
-        isRead: false,
-      },
-      {
-        userId: kitchenUser.id,
-        title: '🏛️ NGO Bulk Claim Received',
-        message: 'Feeding Hope Foundation claimed 20 portions of Dal Makhani & Jeera Rice. Volunteer courier Arjun Patel assigned.',
-        type: 'PICKUP',
-        isRead: false,
-      },
-    ],
-  });
-
-  console.log('✅ Backend database seeded successfully!');
+  console.log('BreadCycle demo database seeded successfully. Save these one-time demo logins now:');
+  for (const { email, password } of demoCredentials) {
+    console.log(`${email} | ${password}`);
+  }
+  console.log('Do not enable Demo Mode for a public production site. Remove ALLOW_DEMO_SEED after setup.');
 }
 
 main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
+  .catch((error) => {
+    if (error instanceof SafeSeedError) {
+      console.error(error.message);
+      process.exitCode = 1;
+      return;
+    }
+    const code = error && typeof error === 'object' && 'code' in error ? ` (${error.code})` : '';
+    console.error(`Demo database seeding failed${code}. Existing records were not deliberately deleted or overwritten. Check database connectivity, schema sync, and configuration.`);
+    process.exitCode = 1;
   })
   .finally(async () => {
     await prisma.$disconnect();

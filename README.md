@@ -99,7 +99,20 @@ The public landing page provides **Login** and **Register**. Registration offers
 
 On local development runs, the backend creates a random session secret in the Windows user profile at `%USERPROFILE%\.breadcycle-session-secret` if no environment secret is provided. Keep this file private and persistent: pickup codes are encrypted using this secret, so replacing it makes existing encrypted codes unreadable. Production deployments must configure `SESSION_SECRET` (at least 32 characters) and `FRONTEND_ORIGINS` (comma-separated exact trusted origins); local development CORS defaults to localhost ports 3000 and 3001.
 
-Existing plaintext pickup codes and legacy pickup notifications are migrated and redacted automatically when the updated backend starts. Prisma schema updates are additive; do not run the destructive seed script against a database containing data you need.
+Existing plaintext pickup codes and legacy pickup notifications are migrated and redacted automatically when the updated backend starts. Prisma schema updates are additive. The demo seeder refuses to run unless explicitly enabled and the target database is empty; it does not delete or overwrite existing records.
+
+### Seed demo accounts into Neon
+
+To add the demo accounts, listings, and sample workflows to Neon without deleting or replacing current records, configure `backend/.env` with the Neon `DATABASE_URL` and the same `SESSION_SECRET` configured on the deployed backend. Keep both values private. From PowerShell:
+
+```powershell
+cd backend
+$env:ALLOW_DEMO_SEED = "true"
+npm.cmd run seed
+Remove-Item Env:ALLOW_DEMO_SEED
+```
+
+Run this from a private local terminal connected to the intended Neon branch, not a shared hosting log console: the script prints a different randomly generated password for each newly created demo account once. Save those credentials securely. Existing users are never deleted, their passwords are never changed, and existing matching demo records are reused. The script stores pickup-code hashes and encrypted codes using `SESSION_SECRET`; if the secret differs from the deployed backend, seeded pickup codes cannot be retrieved. Leave `DEMO_MODE` disabled on public deployments.
 
 ### Safe Local Admin / Demo Setup
 
