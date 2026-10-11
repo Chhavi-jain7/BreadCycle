@@ -4,7 +4,7 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'BreadCycle — Rescue Food. Restore Hope.',
   description:
-    'Intelligent food rescue platform matching surplus meals with verified shelters, community kitchens, and individuals before safe consumption windows expire.',
+    'Rescue good food and connect restaurants, individuals, NGOs, and community kitchens to build a greener, more caring future.',
 };
 
 export default function RootLayout({
@@ -14,7 +14,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="scroll-smooth">
-      <body className="bg-[#fdfbf7] text-[#1c1917] antialiased selection:bg-wheat-300 selection:text-forest-950 font-sans min-h-screen flex flex-col">
+      <body className="min-h-screen flex flex-col bg-ivory-50 font-sans text-forest-950 antialiased selection:bg-wheat-300 selection:text-forest-950">
         {children}
       </body>
     </html>

@@ -80,6 +80,8 @@ export default function RecipientRecordsPage({
   const shownReservations = view === 'pickups'
     ? reservations.filter((reservation) => reservation.status === 'PENDING')
     : reservations;
+  const activeCount = reservations.filter((reservation) => reservation.status === 'PENDING').length;
+  const completedCount = reservations.filter((reservation) => reservation.status === 'CONFIRMED_PICKUP').length;
 
   return (
     <div className="min-h-screen flex flex-col bg-[#fdfbf7]">
@@ -95,7 +97,9 @@ export default function RecipientRecordsPage({
               {view === 'pickups' ? 'My Pickups' : 'My Reservations'}
             </h1>
             <p className="mt-2 text-sm text-stone-600">
-              {view === 'pickups' ? 'Your active collections and secure pickup codes.' : 'Your active and completed food reservations.'}
+              {view === 'pickups'
+                ? 'Only reservations waiting to be collected appear here. Open a pickup to view its secure code.'
+                : 'A complete history of your food reservations, including collection status and pickup details.'}
             </p>
           </div>
           <div className="flex gap-2">
@@ -105,6 +109,19 @@ export default function RecipientRecordsPage({
             </Link>
           </div>
         </div>
+
+        {!loading && (
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:max-w-md">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <span className="block text-xl font-bold text-amber-900">{activeCount}</span>
+              <span className="text-xs font-medium text-amber-800">Awaiting pickup</span>
+            </div>
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <span className="block text-xl font-bold text-emerald-900">{completedCount}</span>
+              <span className="text-xs font-medium text-emerald-800">Collected</span>
+            </div>
+          </div>
+        )}
 
         {message && <p role="alert" className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{message}</p>}
         {loading ? (
@@ -136,7 +153,7 @@ export default function RecipientRecordsPage({
                       <p className="flex items-center gap-2 text-sm text-stone-600"><Clock className="h-4 w-4 text-wheat-700" />Pickup deadline {new Date(reservation.donation.pickupDeadline).toLocaleString()}</p>
                       {active && <p className="text-xs text-stone-500">Collection hold expires {new Date(reservation.expiresAt).toLocaleString()}.</p>}
                     </div>
-                    {active && (
+                    {active && view === 'pickups' && (
                       <div className="w-full rounded-2xl border border-dashed border-wheat-500 bg-[#fffaf0] p-4 text-center md:w-64">
                         {codes[reservation.id] ? (
                           <>
@@ -153,6 +170,15 @@ export default function RecipientRecordsPage({
                         )}
                         <p className="mt-2 text-[11px] text-stone-600">Code is private and valid only for this reservation.</p>
                         <button type="button" onClick={() => cancelReservation(reservation.id)} className="mt-3 text-xs font-semibold text-rose-700 hover:underline">Cancel reservation</button>
+                      </div>
+                    )}
+                    {active && view === 'reservations' && (
+                      <div className="w-full rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center md:w-64">
+                        <p className="text-sm font-semibold text-amber-950">Ready for collection</p>
+                        <p className="mt-1 text-xs text-amber-800">Your pickup code is available in My Pickups.</p>
+                        <Link href="/recipient/pickups" className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl bg-forest-900 px-4 py-2.5 text-sm font-semibold text-wheat-200 hover:bg-forest-800">
+                          <Barcode className="h-4 w-4" /> View pickup
+                        </Link>
                       </div>
                     )}
                     {reservation.status === 'CONFIRMED_PICKUP' && <span className="inline-flex items-center gap-1 text-sm font-semibold text-emerald-800"><CheckCircle2 className="h-4 w-4" />Collected</span>}
